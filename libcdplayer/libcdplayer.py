@@ -109,8 +109,8 @@ class CDReader():
 
 class AudioPlayer():
 
-    preference = [player.PulseAudioOutput,
-                  player.ALSAAudioOutput,
+    preference = [player.ALSAAudioOutput,
+                  player.PulseAudioOutput,
                   player.OSSAudioOutput]
 
     thread = None
