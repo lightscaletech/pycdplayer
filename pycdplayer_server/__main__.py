@@ -1,4 +1,9 @@
 from pycdplayer_server import server
 
 server = server.Server()
-server.run()
+
+try:
+    server.run()
+except KeyboardInterrupt:
+    print("stopping")
+    server.stop()
