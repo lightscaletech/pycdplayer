@@ -70,6 +70,7 @@ class CDReader():
 
         self.qu_frame = fr
         self.lk_disc = threading.Lock()
+        self.ev_stop = threading.Event()
         self.thread = None
 
         self.goto_start()
@@ -93,10 +94,13 @@ class CDReader():
     def check_set_current_track(self):
         pos = self.current_frame - self.framecount.get()
         nextt = self.current_track + 1
-        s = self.tracks[nextt].start
-        e = self.tracks[nextt].end
+        try:
+            s = self.tracks[nextt].start
+            e = self.tracks[nextt].end
 
-        if s <= pos < e: self.current_track = nextt
+            if s <= pos < e: self.current_track = nextt
+        except KeyError: pass
+
 
     def goto_track(self, t):
         try:
@@ -127,8 +131,18 @@ class CDReader():
         self.qu_frame.put(data, True)
 
     def loop(self):
-        while(True):
-            self.read()
+        try:
+            while(True):
+                if self.ev_stop.wait(0): return
+                self.read()
+        except KeyboardInterrupt: pass
+
+    def stop(self):
+        self.ev_stop.set()
+        if self.thread != None:
+            self.thread.join()
+            del self.thread
+            self.thread = None
 
     def start_reading(self):
         thread = threading.Thread(
@@ -150,6 +164,7 @@ class AudioPlayer():
 
         if not self.ao: raise AudioError("Cannot find audio output device")
 
+        self.started = False
         self.framecount = fc
         self.ev_play = threading.Event()
         self.ev_stop = threading.Event()
@@ -168,19 +183,29 @@ class AudioPlayer():
         self.ao.play(data)
 
     def loop(self):
-        while(self.ev_play.wait()):
-            if self.ev_stop.wait(0): return
-            self._play()
+        try:
+            while(self.ev_play.wait()):
+                if self.ev_stop.wait(0): return
+                self._play()
+        except KeyboardInterrupt: pass
+        except: self.reset()
 
     def play(self):
+        self.ao.resume()
         self.ev_play.set()
+
+    def paused(self):
+        return not self.ev_play.is_set()
 
     def pause(self):
         self.ao.pause()
         self.ev_play.clear()
 
+    def reset(self):
+        self.started = False
+
     def stop(self):
-        self.play()
+        self.reset()
         self.ev_stop.set()
         self.thread.join()
         self.ev_stop.clear()
@@ -192,6 +217,7 @@ class AudioPlayer():
             target = self.loop)
 
         self.thread.start()
+        self.started = True
 
 
 class Player():
@@ -204,8 +230,6 @@ class Player():
 
         self.cd = None
 
-        self.load_cd()
-
     def load_cd(self):
         self.cd = CDReader(self.framecount, self.qu_frames)
         if not self.cd.loaded: return
@@ -216,14 +240,29 @@ class Player():
         self.cd.goto_start()
 
     def set_track(self, num):
+        self.ap.ev_play.clear()
         self.cd.goto_track(num)
+        self.ap.ev_play.set()
 
     def play(self):
-        if not self.cd.loaded: return
 
-        self.beginning()
-        self.cd.start_reading()
-        self.ap.start_playing()
+        if (self.cd == None) or (self.cd.loaded == False):
+            self.load_cd()
+            if not self.cd.loaded: return
+
+            self.beginning()
+            self.cd.start_reading()
+
+        if self.ap.started and self.ap.paused():
+            self.ap.play()
+        elif not self.ap.started:
+            self.ap.start_playing()
+
+    def pause(self):
+        self.ap.pause()
 
     def stop(self):
-        self.ap.stop
+        try:
+            self.ap.stop()
+            self.cd.stop()
+        except KeyboardInterrupt: self.stop()
