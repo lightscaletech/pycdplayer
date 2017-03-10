@@ -17,21 +17,30 @@ class APIHandler(SimpleHTTPRequestHandler):
     def error(self, d):        return self.resp(self.CODE_ERROR, d)
     def not_found(self):       return self.resp(self.CODE_NOT_FOUND)
 
+    def def_success(self): return self.success({'status': 'success'})
+
     def track(self, segs):
         if segs[0] == 'set':
             num = int(segs[1])
             player.set_track(num)
-            return self.success({'status': 'success'})
+            return self.def_success()
+        elif segs[0] == 'next':
+            player.next_track()
+            return self.def_success()
+        elif segs[0] == 'prev':
+            player.prev_track()
+            return self.def_success()
+
 
         return self.not_found()
 
     def pause(self):
         player.pause()
-        return self.success({'status': 'success'})
+        return self.def_success()
 
     def play(self):
         player.play()
-        return self.success({'status': 'success'})
+        return self.def_success()
 
     def route(self, segs):
         if   segs[0] == 'track': return self.track(segs[1:])
