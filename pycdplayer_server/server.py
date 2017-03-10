@@ -5,8 +5,6 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 import json
 
 player = libcdplayer.Player()
-player.play()
-
 
 class Server():
     class APIHandler(SimpleHTTPRequestHandler):
