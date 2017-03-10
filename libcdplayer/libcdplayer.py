@@ -49,7 +49,7 @@ class FrameCount():
 
 class CDReader():
 
-    read_rate = 75
+    read_rate = 4048
 
     def __init__(self, fc, fr):
         self.cd = cdio.CDDAReader("/dev/cdrom", False)
