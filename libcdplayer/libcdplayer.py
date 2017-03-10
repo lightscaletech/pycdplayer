@@ -107,13 +107,15 @@ class CDReader():
             while True: self.qu_frame.get_nowait()
         except queue.Empty: pass
 
-        pos = self.tracks[t].start
-        self.lk_disc.acquire()
-        self.cd.seek(pos)
-        self.current_track = t
-        self.current_frame = pos
-        self.check_set_current_track()
-        self.lk_disc.release()
+        try:
+            pos = self.tracks[t].start
+            self.lk_disc.acquire()
+            self.cd.seek(pos)
+            self.current_track = t
+            self.current_frame = pos
+            self.check_set_current_track()
+            self.lk_disc.release()
+        except KeyError: pass
 
     def goto_start(self): self.goto_track(1)
 
@@ -229,6 +231,7 @@ class Player():
         self.ap = AudioPlayer(self.framecount, self.qu_frames)
 
         self.cd = None
+        self.prev_gap = 44100
 
     def load_cd(self):
         self.cd = CDReader(self.framecount, self.qu_frames)
@@ -243,6 +246,17 @@ class Player():
         self.ap.ev_play.clear()
         self.cd.goto_track(num)
         self.ap.ev_play.set()
+
+    def next_track(self): self.set_track(self.cd.current_track + 1)
+    def prev_track(self):
+        try:
+            start = self.cd.tracks[self.cd.current_track].start
+            cur = self.cd.current_frame
+            diff = cur - start
+            t = self.cd.current_track
+            if diff < self.prev_gap: t = t - 1
+            self.set_track(t)
+        except KeyError: pass
 
     def play(self):
 
