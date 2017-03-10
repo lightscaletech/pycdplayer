@@ -2,9 +2,30 @@ from audiotools import cdio
 from audiotools import player
 import queue
 import threading
+import math
 
 class AudioError(Exception): pass
 class CDError(Exception): pass
+
+
+def get_times(mils):
+    minutes = math.floor(mils / 1000 / 60)
+    seconds = math.floor(mils / 1000) - minutes * 60
+    millis = (math.floor(mils) - (minutes * 60 * 1000) - (seconds * 1000))
+    return (minutes, seconds, millis)
+
+class Track():
+    start = 0
+    end = 0
+    length = 0
+
+    def __init__(self, s, e, sec):
+        self.start = s
+        self.end = e
+
+        diff = e - s
+        self.length = round(diff / (sec / 1000))
+        self.minutes, self.seconds, self.millis = get_times(self.length)
 
 class FrameCount():
     lock = threading.Lock()
@@ -43,7 +64,12 @@ class CDReader():
         self.current_track = 1
         self.current_frame = 0
 
+        total_t_len = 0
+        for i, t in self.tracks.items(): total_t_len += t.length
+        self.minutes, self.seconds, self.millis = get_times(total_t_len)
+
         self.qu_frame = fr
+        self.lk_disc = threading.Lock()
         self.thread = None
 
         self.goto_start()
@@ -51,7 +77,9 @@ class CDReader():
     def get_tracks(self):
         tracks = {}
         for t, ofs in self.cd.track_offsets.items():
-            tracks[t] = (ofs, (ofs + self.cd.track_lengths[t]))
+            tracks[t] = Track(ofs,
+                              ofs + self.cd.track_lengths[t],
+                              self.cd.sample_rate)
         return tracks
 
 
@@ -65,36 +93,38 @@ class CDReader():
     def check_set_current_track(self):
         pos = self.current_frame - self.framecount.get()
         nextt = self.current_track + 1
-        s, e = self.tracks[nextt]
+        s = self.tracks[nextt].start
+        e = self.tracks[nextt].end
 
-        if s <= pos < e:
-            self.current_track = nextt
-            print (self.current_track)
-
+        if s <= pos < e: self.current_track = nextt
 
     def goto_track(self, t):
         try:
             while True: self.qu_frame.get_nowait()
         except queue.Empty: pass
 
-        pos = 10300000 #self.tracks[t][0]
+        pos = self.tracks[t].start
+        self.lk_disc.acquire()
         self.cd.seek(pos)
         self.current_track = t
         self.current_frame = pos
         self.check_set_current_track()
+        self.lk_disc.release()
 
     def goto_start(self): self.goto_track(1)
 
     def read(self):
+        self.lk_disc.acquire()
         data = self.cd.read(self.read_rate)
         self.current_frame = self.current_frame + data.frames
+        self.framecount.add(data.frames)
+        self.check_set_current_track()
+        self.lk_disc.release()
 
         if data.frames < 1:
             return self.goto_start()
 
         self.qu_frame.put(data, True)
-        self.framecount.add(data.frames)
-        self.check_set_current_track()
 
     def loop(self):
         while(True):
