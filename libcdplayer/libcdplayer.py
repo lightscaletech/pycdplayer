@@ -7,25 +7,36 @@ import math
 class AudioError(Exception): pass
 class CDError(Exception): pass
 
+def time_from_frames(frames, fps):
+    return Time(frames / (fps / 1000))
 
-def get_times(mils):
-    minutes = math.floor(mils / 1000 / 60)
-    seconds = math.floor(mils / 1000) - minutes * 60
-    millis = (math.floor(mils) - (minutes * 60 * 1000) - (seconds * 1000))
-    return (minutes, seconds, millis)
+class Time(object):
+    def __init__(self, milli):
+        self.update(milli)
 
-class Track():
-    start = 0
-    end = 0
-    length = 0
+    def fulltime(self):
+        return '%i:%i:%i' % (self.minutes, self.seconds, self.millis)
 
-    def __init__(self, s, e, sec):
+    def min_seconds(self):
+        return '%i:%i' % (self.minutes, self.seconds)
+
+    def update(self, milli):
+        self.length = milli
+
+        self.minutes = math.floor(milli / 1000 / 60)
+        self.seconds = math.floor(milli / 1000) - self.minutes * 60
+        self.millis = (math.floor(milli) -
+                       (self.minutes * 60 * 1000) - (self.seconds * 1000))
+
+    def __str__(self): self.fulltime()
+
+class Track(object):
+    def __init__(self, n, s, e, sec):
+        self.num = n
         self.start = s
         self.end = e
-
-        diff = e - s
-        self.length = round(diff / (sec / 1000))
-        self.minutes, self.seconds, self.millis = get_times(self.length)
+        self.frames = e - s
+        self.time = time_from_frames(self.frames, sec)
 
 class FrameCount():
     lock = threading.Lock()
@@ -62,11 +73,13 @@ class CDReader():
 
         self.tracks = self.get_tracks()
         self.current_track = 1
-        self.current_frame = 0
+        self.current_track_time = Time(0)
+        self.current_cd_time = Time(0)
+        self.current_frame = Time(0)
 
         total_t_len = 0
-        for i, t in self.tracks.items(): total_t_len += t.length
-        self.minutes, self.seconds, self.millis = get_times(total_t_len)
+        for i, t in self.tracks.items(): total_t_len += t.frames
+        self.time = time_from_frames(total_t_len, 44100)
 
         self.qu_frame = fr
         self.lk_disc = threading.Lock()
@@ -78,7 +91,7 @@ class CDReader():
     def get_tracks(self):
         tracks = {}
         for t, ofs in self.cd.track_offsets.items():
-            tracks[t] = Track(ofs,
+            tracks[t] = Track(t, ofs,
                               ofs + self.cd.track_lengths[t],
                               self.cd.sample_rate)
         return tracks
@@ -101,6 +114,12 @@ class CDReader():
             if s <= pos < e: self.current_track = nextt
         except KeyError: pass
 
+    def set_current_times(self):
+        pos = self.current_frame - self.framecount.get()
+        tstart = self.tracks[self.current_track].start
+        sr = self.cd.sample_rate / 1000
+        self.current_track_time.update((pos - tstart) / sr)
+        self.current_cd_time.update(pos / sr)
 
     def goto_track(self, t):
         try:
@@ -124,7 +143,6 @@ class CDReader():
         data = self.cd.read(self.read_rate)
         self.current_frame = self.current_frame + data.frames
         self.framecount.add(data.frames)
-        self.check_set_current_track()
         self.lk_disc.release()
 
         if data.frames < 1:
@@ -160,7 +178,7 @@ class AudioPlayer():
                   player.OSSAudioOutput]
 
     thread = None
-
+    update_cb = None
     def __init__(self, fc, fr):
         self.ao = self.getAudioOutput()
 
@@ -189,6 +207,7 @@ class AudioPlayer():
             while(self.ev_play.wait()):
                 if self.ev_stop.wait(0): return
                 self._play()
+                if self.update_cb: self.update_cb()
         except KeyboardInterrupt: pass
         except: self.reset()
 
@@ -209,7 +228,9 @@ class AudioPlayer():
     def stop(self):
         self.reset()
         self.ev_stop.set()
-        self.thread.join()
+        if self.thread:
+            self.thread.join()
+            self.thread = None
         self.ev_stop.clear()
 
     def start_playing(self):
@@ -229,6 +250,7 @@ class Player():
         self.framecount = FrameCount()
 
         self.ap = AudioPlayer(self.framecount, self.qu_frames)
+        self.ap.update_cb = self.play_loop
 
         self.cd = None
         self.prev_gap = 44100
@@ -238,6 +260,10 @@ class Player():
         if not self.cd.loaded: return
 
         self.cd.set_out_format(self.ap.ao)
+
+    def play_loop(self):
+        self.cd.check_set_current_track()
+        self.cd.set_current_times()
 
     def beginning(self):
         self.cd.goto_start()
@@ -258,8 +284,10 @@ class Player():
             self.set_track(t)
         except KeyError: pass
 
-    def play(self):
+    def current_track(self): return self.cd.tracks[self.cd.current_track]
+    def tracks(self):        return self.cd.tracks
 
+    def play(self):
         if (self.cd == None) or (self.cd.loaded == False):
             self.load_cd()
             if not self.cd.loaded: return
@@ -276,7 +304,5 @@ class Player():
         self.ap.pause()
 
     def stop(self):
-        try:
-            self.ap.stop()
-            self.cd.stop()
-        except KeyboardInterrupt: self.stop()
+        self.ap.stop()
+        if self.cd: self.cd.stop()
